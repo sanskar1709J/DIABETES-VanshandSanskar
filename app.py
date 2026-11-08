@@ -30,12 +30,10 @@ st.markdown("""
 def load_or_train_model():
     feature_names = ["Pregnancies", "Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI", "DiabetesPedigreeFunction", "Age"]
     
-    # Load from Excel file
     excel_path = "combined_diabetes_cleaned.xlsx"
     if os.path.exists(excel_path):
         try:
             df = pd.read_excel(excel_path)
-            # Extract the subset containing the valid Pima diagnostic records
             df = df.dropna(subset=['Outcome', 'Glucose', 'BMI'])
         except Exception as e:
             st.warning(f"Error reading Excel file: {e}. Falling back to default URL...")
@@ -54,7 +52,6 @@ def load_or_train_model():
     X_scaled = scaler.fit_transform(X)
 
     base_rf = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=6)
-    # Probability calibration ensures dynamic range across 0% to 100%
     model = CalibratedClassifierCV(base_rf, cv=3)
     model.fit(X_scaled, y)
 
@@ -90,7 +87,8 @@ scaled_input = scaler.transform(input_df)
 
 proba = model.predict_proba(scaled_input)[0][1] * 100
 
-tab1, tab2, tab3 = st.tabs(["📊 Diagnostics & Prediction", "📈 10-Year Progression Forecast", "📋 Dataset & Audit"])
+# Reduced tabs to 2 (removed Dataset & Audit)
+tab1, tab2 = st.tabs(["📊 Diagnostics & Prediction", "📈 10-Year Progression Forecast"])
 
 with tab1:
     col1, col2 = st.columns([1, 1])
@@ -135,7 +133,6 @@ with tab2:
     
     for y in years:
         sim_dict = input_dict.copy()
-        # Accumulate changes over time
         sim_dict["Age"] = int(min(81, age + y))
         sim_dict["BMI"] = float(max(15.0, min(67.1, bmi + (annual_bmi * y))))
         sim_dict["Glucose"] = float(max(40, min(250, glucose + (annual_glucose * y))))
@@ -143,29 +140,22 @@ with tab2:
         sim_df = pd.DataFrame([sim_dict])[feature_list]
         scaled_sim = scaler.transform(sim_df)
         
-        # Get raw probability without strict threshold clamping
         p = model.predict_proba(scaled_sim)[0][1] * 100
         future_probas.append(round(p, 2))
 
-    # Build clean charting dataframe
+    # Using zero-padded labels ("Year 00" to "Year 10") to guarantee correct chronological axis sorting
     prog_df = pd.DataFrame({
-        "Year": [f"Year {y}" for y in years],
+        "Year": [f"Year {y:02d}" for y in years],
         "Projected Risk (%)": future_probas
     })
     
-    # Render interactive line chart
     st.line_chart(prog_df.set_index("Year"), use_container_width=True)
     
-    # Display summary table of the projection
     with st.expander("View Year-by-Year Projection Data"):
-        st.dataframe(prog_df, use_container_width=True)
-with tab3:
-    st.subheader("📄 Dataset Inspection")
-    if os.path.exists("combined_diabetes_cleaned.xlsx"):
-        df_display = pd.read_excel("combined_diabetes_cleaned.xlsx")
-        st.dataframe(df_display.head(50), use_container_width=True)
-    else:
-        st.info("Local `combined_diabetes_cleaned.xlsx` file not found.")
+        # Display with cleaner labels in the table
+        table_df = prog_df.copy()
+        table_df["Year"] = [f"Year {y}" for y in years]
+        st.dataframe(table_df, use_container_width=True)
 
 st.markdown("---")
 st.markdown("💡 *Streamlit Diabetes Risk App*")
