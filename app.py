@@ -60,7 +60,7 @@ def load_or_train_model():
     # Train on your committed clean CSV dataset
     csv_path = "pima_diabetes_cleaned.csv"
     if os.path.exists(csv_path):
-        df = pd.read_csv(csv_path)
+        df = pd.read_excel('combined_diabetes_cleaned.xlsx')
     else:
         # Fallback to direct UCI URL if local file is missing
         url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
