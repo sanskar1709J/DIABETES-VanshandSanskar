@@ -1,175 +1,172 @@
-import streamlit as st
-import pandas as pd
+import os
+import pickle
 import numpy as np
-import matplotlib.pyplot as plt
-import xgboost as xgb
-from sklearn.model_selection import train_test_split
-from sklearn.calibration import CalibratedClassifierCV
+import pandas as pd
+import streamlit as st
+from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
-from sksurv.linear_model import CoxPHSurvivalAnalysis
-from sksurv.preprocessing import OneHotEncoder
+from sklearn.calibration import CalibratedClassifierCV
 
-# --- PAGE CONFIGURATION ---
+# Page configuration
 st.set_page_config(
-    page_title="Glucoview 10-Year Diabetes Risk Predictor",
+    page_title="Diabetes Risk & 10-Year Health Progression",
     page_icon="🩺",
-    layout="wide"
+    layout="wide",
+    initial_sidebar_state="expanded"
 )
 
-# --- CACHED MODEL TRAINING PIPELINE ---
-@st.cache_resource
-def train_diabetes_models():
-    """
-    Generates realistic clinical training data and trains:
-    1. An XGBoost Classifier wrapped in Isotonic Calibration (for 0-100% current risk).
-    2. A Cox Proportional Hazards model (for the 10-year survival/risk timeline).
-    """
-    np.random.seed(42)
-    n_samples = 5000
-    
-    # Generate synthetic clinical features
-    age = np.random.randint(25, 75, size=n_samples)
-    bmi = np.random.normal(27, 5, size=n_samples).clip(15, 50)
-    glucose = np.random.normal(100, 25, size=n_samples).clip(70, 250)
-    blood_pressure = np.random.normal(120, 15, size=n_samples).clip(90, 190)
-    family_history = np.random.choice([0, 1], size=n_samples, p=[0.7, 0.3])
-    physical_activity = np.random.choice([0, 1, 2], size=n_samples, p=[0.3, 0.5, 0.2]) # 0: Low, 1: Mod, 2: High
-
-    # Synthetic target generation logic based on risk factors
-    risk_score = (
-        (age - 25) * 0.04 +
-        (bmi - 22) * 0.07 +
-        (glucose - 90) * 0.06 +
-        (blood_pressure - 110) * 0.02 +
-        family_history * 1.2 -
-        physical_activity * 0.5
-    )
-    # Convert to probability via sigmoid
-    prob = 1 / (1 + np.exp(-risk_score + 3.5))
-    current_diabetes = (np.random.random(n_samples) < prob).astype(int)
-    
-    # Time-to-event for survival analysis (in years, max 10)
-    time_to_event = np.random.exponential(scale=8, size=n_samples)
-    time_to_event = np.clip(time_to_event, 0.5, 10.0)
-    # If they already have diabetes or low risk, adjust event times
-    event_occurred = np.where((current_diabetes == 1) | (prob > 0.6), 1, np.random.choice([0, 1], size=n_samples, p=[0.4, 0.6]))
-    
-    df = pd.DataFrame({
-        'Age': age,
-        'BMI': bmi,
-        'Glucose': glucose,
-        'BloodPressure': blood_pressure,
-        'FamilyHistory': family_history,
-        'PhysicalActivity': physical_activity,
-        'Target': current_diabetes,
-        'Time': time_to_event,
-        'Event': event_occurred
-    })
-
-    # Features for classification
-    X_class = df[['Age', 'BMI', 'Glucose', 'BloodPressure', 'FamilyHistory', 'PhysicalActivity']]
-    y_class = df['Target']
-    
-    scaler = StandardScaler()
-    X_class_scaled = scaler.fit_transform(X_class)
-    
-    # Train XGBoost with CalibratedClassifierCV to get true 0-100% probabilities
-    base_xgb = xgb.XGBClassifier(n_estimators=100, max_depth=4, learning_rate=0.05, random_state=42)
-    calibrated_model = CalibratedClassifierCV(base_xgb, method='isotonic', cv=3)
-    calibrated_model.fit(X_class_scaled, y_class)
-    
-    # Train Cox Proportional Hazards Model for Timeline Analysis
-    X_surv = df[['Age', 'BMI', 'Glucose', 'BloodPressure', 'FamilyHistory', 'PhysicalActivity']]
-    # scikit-survival requires structured array for (event, time)
-    y_surv = np.array(list(zip(df['Event'].astype(bool), df['Time'])), dtype=[('Status', '?'), ('Time', '<f8')])
-    
-    cox_model = CoxPHSurvivalAnalysis()
-    cox_model.fit(X_surv, y_surv)
-
-    return calibrated_model, cox_model, scaler
-
-# Load models
-clf_model, cox_model, scaler = train_diabetes_models()
-
-# --- STREAMLIT USER INTERFACE ---
-st.title("🩺 Advanced Diabetes Risk & 10-Year Timeline Predictor")
+# Custom Styling
 st.markdown("""
-This clinical decision-support tool utilizes an **XGBoost Classifier with Isotonic Probability Calibration** to eliminate clustering artifacts and provide true 0–100% risk scoring, alongside a **Cox Proportional Hazards Survival Model** to map cumulative risk progression over a 10-year timeline.
-""")
+<style>
+    .main-header { font-size: 2.2rem; color: #1E3A8A; font-weight: 700; }
+    .sub-header { font-size: 1.1rem; color: #4B5563; margin-bottom: 25px; }
+    .risk-high { background-color: #FEE2E2; border-left: 6px solid #DC2626; padding: 15px; border-radius: 8px; color: #991B1B; }
+    .risk-mod { background-color: #FEF3C7; border-left: 6px solid #D97706; padding: 15px; border-radius: 8px; color: #92400E; }
+    .risk-low { background-color: #D1FAE5; border-left: 6px solid #059669; padding: 15px; border-radius: 8px; color: #065F46; }
+</style>
+""", unsafe_allow_html=True)
 
-st.sidebar.header("Patient Clinical Parameters")
+def find_file(candidates):
+    for name in candidates:
+        if os.path.exists(name):
+            return name
+    return None
 
-def user_input_features():
-    age = st.sidebar.slider("Age (Years)", 20, 80, 42)
-    bmi = st.sidebar.slider("BMI (Body Mass Index)", 15.0, 45.0, 26.5)
-    glucose = st.sidebar.slider("Fasting Blood Glucose (mg/dL)", 70, 250, 105)
-    blood_pressure = st.sidebar.slider("Systolic Blood Pressure (mmHg)", 90, 190, 122)
-    family_history = st.sidebar.selectbox("Family History of Diabetes", options=[0, 1], format_func=lambda x: "Yes" if x == 1 else "No")
-    physical_activity = st.sidebar.selectbox("Physical Activity Level", options=[0, 1, 2], format_func=lambda x: ["Low (Sedentary)", "Moderate", "High (Active)"][x])
-    
-    data = {
-        'Age': age,
-        'BMI': bmi,
-        'Glucose': glucose,
-        'BloodPressure': blood_pressure,
-        'FamilyHistory': family_history,
-        'PhysicalActivity': physical_activity
-    }
-    return pd.DataFrame(data, index=[0])
+@st.cache_resource
+def load_or_train_model():
+    model_candidates = ["diabetes_model (5).pkl", "diabetes_model (3).pkl", "diabetes_model.pkl", "model.pkl"]
+    scaler_candidates = ["scaler (5).pkl", "scaler (4).pkl", "scaler.pkl"]
+    feature_candidates = ["feature_names (6).pkl", "feature_names (4).pkl", "feature_names.pkl"]
 
-input_df = user_input_features()
+    model_path = find_file(model_candidates)
+    scaler_path = find_file(scaler_candidates)
+    feature_path = find_file(feature_candidates)
 
-# Display User Input Summary
-st.subheader("📋 Current Patient Profile")
-st.dataframe(input_df, use_container_width=True)
+    feature_names = ["Pregnancies", "Glucose", "BloodPressure", "SkinThickness", "Insulin", "BMI", "DiabetesPedigreeFunction", "Age"]
 
-# --- PREDICTION COMPUTATION ---
-# Scale inputs for classification model
-input_scaled = scaler.transform(input_df)
+    if model_path and scaler_path:
+        try:
+            with open(model_path, "rb") as f:
+                model = pickle.load(f)
+            with open(scaler_path, "rb") as f:
+                scaler = pickle.load(f)
+            if feature_path:
+                with open(feature_path, "rb") as f:
+                    feature_names = pickle.load(f)
+            return model, scaler, feature_names, f"Loaded pre-trained (`{model_path}`)"
+        except Exception as e:
+            st.warning(f"Could not load pickle file: {e}. Retraining on clean dataset...")
 
-# Current probability (0 to 100%)
-current_prob = clf_model.predict_proba(input_scaled)[0][1] * 100
+    # Train on your committed clean CSV dataset
+    csv_path = "pima_diabetes_cleaned.csv"
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
+    else:
+        # Fallback to direct UCI URL if local file is missing
+        url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
+        cols = feature_names + ["Outcome"]
+        df = pd.read_csv(url, names=cols)
 
-# Layout metrics
-col1, col2 = st.columns(2)
-with col1:
-    st.metric(label="Estimated Current Diabetes Probability", value=f"{current_prob:.1f}%")
-with col2:
-    risk_category = "High Risk" if current_prob > 50 else ("Moderate Risk" if current_prob > 25 else "Low Risk")
-    st.metric(label="Clinical Risk Stratification", value=risk_category)
+    X = df[feature_names]
+    y = df["Outcome"]
+
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X)
+
+    base_rf = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=6)
+    # Probability calibration ensures dynamic range across 0% to 100%
+    model = CalibratedClassifierCV(base_rf, cv=3)
+    model.fit(X_scaled, y)
+
+    return model, scaler, feature_names, "Trained on Clean Pima Dataset"
+
+model, scaler, feature_list, model_status = load_or_train_model()
+
+st.markdown('<div class="main-header">🩺 Diabetes Risk Prediction & Health Tracker</div>', unsafe_allow_html=True)
+st.markdown(f'<div class="sub-header">Interactive Machine Learning Diagnostics & 10-Year Progression Simulator | <small>Status: {model_status}</small></div>', unsafe_allow_html=True)
+
+st.sidebar.header("📋 Patient Clinical Parameters")
+pregnancies = st.sidebar.slider("Pregnancies", 0, 17, 1)
+glucose = st.sidebar.slider("Glucose Level (mg/dL)", 40, 200, 117)
+blood_pressure = st.sidebar.slider("Blood Pressure (mmHg)", 40, 130, 72)
+skin_thickness = st.sidebar.slider("Skin Thickness (mm)", 7, 99, 23)
+insulin = st.sidebar.slider("Insulin (mu U/ml)", 14, 846, 85)
+bmi = st.sidebar.slider("BMI (kg/m²)", 18.0, 67.1, 32.0, step=0.1)
+dpf = st.sidebar.slider("Diabetes Pedigree Function", 0.078, 2.42, 0.372, step=0.001)
+age = st.sidebar.slider("Age (Years)", 21, 81, 29)
+
+input_dict = {
+    "Pregnancies": pregnancies,
+    "Glucose": glucose,
+    "BloodPressure": blood_pressure,
+    "SkinThickness": skin_thickness,
+    "Insulin": insulin,
+    "BMI": bmi,
+    "DiabetesPedigreeFunction": dpf,
+    "Age": age
+}
+input_df = pd.DataFrame([input_dict])[feature_list]
+scaled_input = scaler.transform(input_df)
+
+proba = model.predict_proba(scaled_input)[0][1] * 100
+
+tab1, tab2, tab3 = st.tabs(["📊 Diagnostics & Prediction", "📈 10-Year Progression Forecast", "📋 Dataset & Audit"])
+
+with tab1:
+    col1, col2 = st.columns([1, 1])
+    with col1:
+        st.subheader("Diagnostic Risk Evaluation")
+        if proba >= 60:
+            st.markdown(f'<div class="risk-high"><h3>⚠️ High Diabetes Risk</h3><h2>Probability: {proba:.1f}%</h2><p>Model predicts high probability of Type-2 Diabetes.</p></div>', unsafe_allow_html=True)
+        elif proba >= 35:
+            st.markdown(f'<div class="risk-mod"><h3>⚡ Moderate Diabetes Risk</h3><h2>Probability: {proba:.1f}%</h2><p>Borderline risk indicators detected.</p></div>', unsafe_allow_html=True)
+        else:
+            st.markdown(f'<div class="risk-low"><h3>✅ Low Diabetes Risk</h3><h2>Probability: {proba:.1f}%</h2><p>Clinical values are within normal ranges.</p></div>', unsafe_allow_html=True)
+
+        st.write("")
+        st.markdown("#### Patient Snapshot")
+        mcol1, mcol2, mcol3 = st.columns(3)
+        mcol1.metric("Glucose", f"{glucose} mg/dL")
+        mcol2.metric("BMI", f"{bmi} kg/m²")
+        mcol3.metric("Age", f"{age} yrs")
+
+    with col2:
+        st.subheader("Feature Importance Breakdown")
+        # Handle both base RandomForest and Calibrated models
+        estimator = model.calibrated_classifiers_[0].estimator if hasattr(model, "calibrated_classifiers_") else model
+        if hasattr(estimator, "feature_importances_"):
+            feat_imp = pd.DataFrame({
+                "Feature": feature_list,
+                "Importance": estimator.feature_importances_
+            }).sort_values("Importance", ascending=True)
+            st.bar_chart(feat_imp.set_index("Feature"))
+
+with tab2:
+    st.subheader("🔮 10-Year Risk Progression Simulator")
+    annual_bmi = st.slider("Annual BMI Change (kg/m²/yr)", -0.5, 1.0, 0.1, step=0.1)
+    annual_glucose = st.slider("Annual Glucose Drift (mg/dL/yr)", -1.0, 3.0, 0.5, step=0.1)
+
+    years = list(range(0, 11))
+    future_probas = []
+    for y in years:
+        sim_dict = input_dict.copy()
+        sim_dict["Age"] = min(81, age + y)
+        sim_dict["BMI"] = max(15.0, min(65.0, bmi + (annual_bmi * y)))
+        sim_dict["Glucose"] = max(50, min(250, glucose + (annual_glucose * y)))
+        sim_df = pd.DataFrame([sim_dict])[feature_list]
+        p = model.predict_proba(scaler.transform(sim_df))[0][1] * 100
+        future_probas.append(p)
+
+    prog_df = pd.DataFrame({"Year": [f"Yr {y}" for y in years], "Risk (%)": future_probas}).set_index("Year")
+    st.line_chart(prog_df)
+
+with tab3:
+    st.subheader("📄 Dataset Inspection")
+    if os.path.exists("pima_diabetes_cleaned.csv"):
+        df_display = pd.read_csv("pima_diabetes_cleaned.csv")
+        st.dataframe(df_display.head(50), use_container_width=True)
+    else:
+        st.info("Local `pima_diabetes_cleaned.csv` file not found.")
 
 st.markdown("---")
-
-# --- 10-YEAR TIMELINE GRAPH GENERATION ---
-st.subheader("📈 10-Year Cumulative Risk Timeline")
-st.markdown("The curve below forecasts the cumulative percentage chance of developing or progressing with Type 2 Diabetes over a 10-year horizon based on your physiological parameters.")
-
-# Predict survival function using Cox Model
-try:
-    survival_funcs = cox_model.predict_survival_function(input_df)
-    timeline_years = np.linspace(0, 10, 50)
-    
-    # Calculate cumulative risk: 1 - Survival Probability
-    cumulative_risk = [1 - fn(t) for t in timeline_years]
-    # Scale based on current model output to blend baseline hazard smoothly
-    cumulative_risk = np.clip(np.array(cumulative_risk) * (current_prob / 50.0), 0, 1) * 100
-
-    fig, ax = plt.subplots(figsize=(10, 4.5))
-    ax.plot(timeline_years, cumulative_risk, color='#ff4b4b', linewidth=3, label="Cumulative Risk Trajectory")
-    ax.fill_between(timeline_years, 0, cumulative_risk, color='#ff4b4b', alpha=0.15)
-    
-    ax.set_title("10-Year Projected Diabetes Risk Progression", fontsize=12, fontweight='bold', pad=12)
-    ax.set_xlabel("Timeline (Years from baseline)", fontsize=10)
-    ax.set_ylabel("Cumulative Risk (%)", fontsize=10)
-    ax.set_ylim(0, 100)
-    ax.set_xlim(0, 10)
-    ax.grid(True, linestyle='--', alpha=0.5)
-    ax.legend(loc="upper left")
-    
-    st.pyplot(fig)
-except Exception as e:
-    st.error(f"Could not render survival curve: {e}")
-
-# Footer notes
-st.markdown("---")
-st.caption("Disclaimer: This tool is built for educational and demonstration purposes using synthetic clinical data distributions. It does not replace professional medical diagnosis or endocrinological evaluation.")
+st.markdown("💡 *Streamlit Diabetes Risk App*")
