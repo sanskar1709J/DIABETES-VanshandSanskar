@@ -122,23 +122,43 @@ with tab1:
 
 with tab2:
     st.subheader("🔮 10-Year Risk Progression Simulator")
-    annual_bmi = st.slider("Annual BMI Change (kg/m²/yr)", -0.5, 1.0, 0.1, step=0.1)
-    annual_glucose = st.slider("Annual Glucose Drift (mg/dL/yr)", -1.0, 3.0, 0.5, step=0.1)
+    st.markdown("Adjust the expected annual rate of change to simulate future health trajectories.")
+    
+    col_s1, col_s2 = st.columns(2)
+    with col_s1:
+        annual_bmi = st.slider("Annual BMI Change (kg/m²/yr)", -1.0, 2.0, 0.3, step=0.1)
+    with col_s2:
+        annual_glucose = st.slider("Annual Glucose Drift (mg/dL/yr)", -2.0, 6.0, 1.5, step=0.1)
 
     years = list(range(0, 11))
     future_probas = []
+    
     for y in years:
         sim_dict = input_dict.copy()
-        sim_dict["Age"] = min(81, age + y)
-        sim_dict["BMI"] = max(15.0, min(65.0, bmi + (annual_bmi * y)))
-        sim_dict["Glucose"] = max(50, min(250, glucose + (annual_glucose * y)))
+        # Accumulate changes over time
+        sim_dict["Age"] = int(min(81, age + y))
+        sim_dict["BMI"] = float(max(15.0, min(67.1, bmi + (annual_bmi * y))))
+        sim_dict["Glucose"] = float(max(40, min(250, glucose + (annual_glucose * y))))
+        
         sim_df = pd.DataFrame([sim_dict])[feature_list]
-        p = model.predict_proba(scaler.transform(sim_df))[0][1] * 100
-        future_probas.append(p)
+        scaled_sim = scaler.transform(sim_df)
+        
+        # Get raw probability without strict threshold clamping
+        p = model.predict_proba(scaled_sim)[0][1] * 100
+        future_probas.append(round(p, 2))
 
-    prog_df = pd.DataFrame({"Year": [f"Yr {y}" for y in years], "Risk (%)": future_probas}).set_index("Year")
-    st.line_chart(prog_df)
-
+    # Build clean charting dataframe
+    prog_df = pd.DataFrame({
+        "Year": [f"Year {y}" for y in years],
+        "Projected Risk (%)": future_probas
+    })
+    
+    # Render interactive line chart
+    st.line_chart(prog_df.set_index("Year"), use_container_width=True)
+    
+    # Display summary table of the projection
+    with st.expander("View Year-by-Year Projection Data"):
+        st.dataframe(prog_df, use_container_width=True)
 with tab3:
     st.subheader("📄 Dataset Inspection")
     if os.path.exists("combined_diabetes_cleaned.xlsx"):
