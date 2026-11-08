@@ -172,4 +172,4 @@ except Exception as e:
 
 # Footer notes
 st.markdown("---")
-*st.caption("Disclaimer: This tool is built for educational and demonstration purposes using synthetic clinical data distributions. It does not replace professional medical diagnosis or endocrinological evaluation.")*
+st.caption("Disclaimer: This tool is built for educational and demonstration purposes using synthetic clinical data distributions. It does not replace professional medical diagnosis or endocrinological evaluation.")*
