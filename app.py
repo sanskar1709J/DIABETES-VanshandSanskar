@@ -170,3 +170,4 @@ with tab3:
 
 st.markdown("---")
 st.markdown("💡 *Streamlit Diabetes Risk App*")
+
