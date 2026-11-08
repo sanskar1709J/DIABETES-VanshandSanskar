@@ -5,6 +5,7 @@ import pandas as pd
 import streamlit as st
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.preprocessing import StandardScaler
+from sklearn.calibration import CalibratedClassifierCV
 
 # Page configuration
 st.set_page_config(
@@ -33,9 +34,9 @@ def find_file(candidates):
 
 @st.cache_resource
 def load_or_train_model():
-    model_candidates = ["diabetes_model (3).pkl", "diabetes_model.pkl", "model.pkl"]
-    scaler_candidates = ["scaler (4).pkl", "scaler.pkl"]
-    feature_candidates = ["feature_names (4).pkl", "feature_names.pkl"]
+    model_candidates = ["diabetes_model (5).pkl", "diabetes_model (3).pkl", "diabetes_model.pkl", "model.pkl"]
+    scaler_candidates = ["scaler (5).pkl", "scaler (4).pkl", "scaler.pkl"]
+    feature_candidates = ["feature_names (6).pkl", "feature_names (4).pkl", "feature_names.pkl"]
 
     model_path = find_file(model_candidates)
     scaler_path = find_file(scaler_candidates)
@@ -52,28 +53,19 @@ def load_or_train_model():
             if feature_path:
                 with open(feature_path, "rb") as f:
                     feature_names = pickle.load(f)
-            return model, scaler, feature_names, f"Loaded from `{model_path}`"
+            return model, scaler, feature_names, f"Loaded pre-trained (`{model_path}`)"
         except Exception as e:
-            st.warning(f"Failed to load pickle files ({e}). Fallback to auto-trained model.")
+            st.warning(f"Could not load pickle file: {e}. Retraining on clean dataset...")
 
-    excel_path = "pima_diabetes_cleaned.xlsx"
-    if os.path.exists(excel_path):
-        df = pd.read_excel(excel_path, sheet_name="Cleaned Dataset (Model Ready)")
+    # Train on your committed clean CSV dataset
+    csv_path = "pima_diabetes_cleaned.csv"
+    if os.path.exists(csv_path):
+        df = pd.read_csv(csv_path)
     else:
-        # Generate synthetic fallback dataset matching PIMA distributions
-        np.random.seed(42)
-        n = 500
-        df = pd.DataFrame({
-            "Pregnancies": np.random.randint(0, 10, n),
-            "Glucose": np.random.randint(70, 190, n),
-            "BloodPressure": np.random.randint(60, 100, n),
-            "SkinThickness": np.random.randint(15, 45, n),
-            "Insulin": np.random.randint(30, 250, n),
-            "BMI": np.random.uniform(18.5, 45.0, n),
-            "DiabetesPedigreeFunction": np.random.uniform(0.1, 1.5, n),
-            "Age": np.random.randint(21, 70, n),
-            "Outcome": np.random.randint(0, 2, n)
-        })
+        # Fallback to direct UCI URL if local file is missing
+        url = "https://raw.githubusercontent.com/jbrownlee/Datasets/master/pima-indians-diabetes.data.csv"
+        cols = feature_names + ["Outcome"]
+        df = pd.read_csv(url, names=cols)
 
     X = df[feature_names]
     y = df["Outcome"]
@@ -81,10 +73,12 @@ def load_or_train_model():
     scaler = StandardScaler()
     X_scaled = scaler.fit_transform(X)
 
-    model = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=5)
+    base_rf = RandomForestClassifier(n_estimators=100, random_state=42, max_depth=6)
+    # Probability calibration ensures dynamic range across 0% to 100%
+    model = CalibratedClassifierCV(base_rf, cv=3)
     model.fit(X_scaled, y)
 
-    return model, scaler, feature_names, "Auto-trained Random Forest Model"
+    return model, scaler, feature_names, "Trained on Clean Pima Dataset"
 
 model, scaler, feature_list, model_status = load_or_train_model()
 
@@ -138,10 +132,12 @@ with tab1:
 
     with col2:
         st.subheader("Feature Importance Breakdown")
-        if hasattr(model, "feature_importances_"):
+        # Handle both base RandomForest and Calibrated models
+        estimator = model.calibrated_classifiers_[0].estimator if hasattr(model, "calibrated_classifiers_") else model
+        if hasattr(estimator, "feature_importances_"):
             feat_imp = pd.DataFrame({
                 "Feature": feature_list,
-                "Importance": model.feature_importances_
+                "Importance": estimator.feature_importances_
             }).sort_values("Importance", ascending=True)
             st.bar_chart(feat_imp.set_index("Feature"))
 
@@ -166,11 +162,11 @@ with tab2:
 
 with tab3:
     st.subheader("📄 Dataset Inspection")
-    if os.path.exists("pima_diabetes_cleaned.xlsx"):
-        df = pd.read_csv('pima_diabetes_cleaned.csv')
-        st.dataframe(df_display.head(20))
+    if os.path.exists("pima_diabetes_cleaned.csv"):
+        df_display = pd.read_csv("pima_diabetes_cleaned.csv")
+        st.dataframe(df_display.head(50), use_container_width=True)
     else:
-        st.info("Local `pima_diabetes_cleaned.xlsx` file not found.")
+        st.info("Local `pima_diabetes_cleaned.csv` file not found.")
 
 st.markdown("---")
 st.markdown("💡 *Streamlit Diabetes Risk App*")
