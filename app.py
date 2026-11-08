@@ -167,7 +167,7 @@ with tab2:
 with tab3:
     st.subheader("📄 Dataset Inspection")
     if os.path.exists("pima_diabetes_cleaned.xlsx"):
-        df_display = pd.read_excel("pima_diabetes_cleaned.xlsx", sheet_name="Cleaned Dataset (Model Ready)")
+        df = pd.read_csv('pima_diabetes_cleaned.csv')
         st.dataframe(df_display.head(20))
     else:
         st.info("Local `pima_diabetes_cleaned.xlsx` file not found.")
