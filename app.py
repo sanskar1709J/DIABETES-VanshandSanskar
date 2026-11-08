@@ -64,8 +64,8 @@ st.markdown(f'<div class="sub-header">Interactive Machine Learning Diagnostics &
 
 st.sidebar.header("📋 Patient Clinical Parameters")
 pregnancies = st.sidebar.slider("Pregnancies", 0, 17, 1)
-glucose = st.sidebar.slider("Glucose Level (mg/dL)", 40, 200, 117)
-blood_pressure = st.sidebar.slider("Blood Pressure (mmHg)", 40, 130, 72)
+glucose = st.sidebar.slider("Glucose Level (mg/dL)", 40, 400, 117)
+blood_pressure = st.sidebar.slider("Blood Pressure (mmHg)", 40, 200, 72)
 skin_thickness = st.sidebar.slider("Skin Thickness (mm)", 7, 99, 23)
 insulin = st.sidebar.slider("Insulin (mu U/ml)", 14, 846, 85)
 bmi = st.sidebar.slider("BMI (kg/m²)", 18.0, 67.1, 32.0, step=0.1)
